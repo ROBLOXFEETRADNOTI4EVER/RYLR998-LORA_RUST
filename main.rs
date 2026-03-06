@@ -8,6 +8,7 @@ use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Instant, Timer};
 use embedded_io_async::{Read, Write};
 use esp_hal::clock::CpuClock;
+use esp_hal::gpio::{Output, OutputConfig};
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::uart::{Config, Uart};
 use esp_println as _;
@@ -269,11 +270,12 @@ type SharedLora = Mutex<CriticalSectionRawMutex, LoraDriver>;
 static LORA: StaticCell<SharedLora> = StaticCell::new();
 
 #[embassy_executor::task]
-async fn receiver_task(lora: &'static SharedLora) {
+async fn receiver_task(lora: &'static SharedLora,mut piezo: Output<'static>) {
     loop {
         let pkt = lora.lock().await.recv().await;
         if let Some(p) = pkt {
             info!("PKT from={} rssi={}dBm snr={} data={}", p.from, p.rssi, p.snr, p.data.as_str());
+            piezo.toggle();
         }
     }
 }
@@ -298,6 +300,8 @@ async fn sender_task(lora: &'static SharedLora) {
     }
 }
 
+
+
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
@@ -313,6 +317,7 @@ async fn main(spawner: Spawner) {
         .with_tx(peripherals.GPIO23)
         .into_async();
 
+    let mut piezo: Output<'static> = Output::new(peripherals.GPIO5, esp_hal::gpio::Level::Low, OutputConfig::default());
     let lora_config = LoraConfig::default_eu()
         .freq(915000000)
         .network(18)
@@ -326,7 +331,7 @@ async fn main(spawner: Spawner) {
     let lora: &'static SharedLora = LORA.init(Mutex::new(driver));
 
     if IS_A_RECEIVER {
-        spawner.spawn(receiver_task(lora)).unwrap();
+        spawner.spawn(receiver_task(lora,piezo)).unwrap();
     } else {
         spawner.spawn(sender_task(lora)).unwrap();
     }
